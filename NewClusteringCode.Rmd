@@ -1,0 +1,672 @@
+---
+title: "MSiA 421 - HW 1"
+author: "Elliot Gardner"
+date: "January 21, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#load necessary packages
+library(readr)
+library(lubridate)
+library(tidyverse)
+getwd()
+```
+
+```{r}
+#load the data
+#data <- read_csv("liweb.csv")
+```
+
+```{r}
+head(data)
+
+```
+
+```{r}
+#pull a sample of 1000 observations to get a feel for the data
+test_indices <- sample(1:nrow(data), size = 1000)
+test_data <- data[test_indices,]
+```
+
+```{r}
+#use dplyr's count function to examine the distributions of various columns
+count(data, pubtime)
+```
+
+## Data Specifications
+$keywords - 8958 unique listings, seems to be a concatenation of keywords that have been associated with the article, pretty dirty listings, 4021732 "NULL"", 6649 N/A, 2769 "0", a variety of other single integer value listings, but fairly small number
+
+$timestamp - the day that the view occurred on, values from 0 to 31 (1 instance of 39 is an error), 9271 N/A values, 
+
+$section - 82 different values, seems to be overarching section of the paper that the article falls under, 4 N/A, 2 "NULL", 3 "null", 1315456 "other"
+
+$product - 58 different values, seems to correlate to the section of the paper, but also describe the type of page that was displayed, 99.77% are for app or web values, with the rest seemingly "section" values. 4 NULL
+
+$page_type - seems like a category of page that we shown, majority "other" (2237862), 99.78% are "other", "front", "article", and "photo"
+The section, product, and page_type data seems to show, usually, the section viewed, the product delivered (web, app, etc), and the type of page it is (photo, front, etc), but if the section is filled in as an edition (day, morning, evening, etc), then the data gets pushed over, where the section is under "product", and the product is under "page_type".
+
+
+$pubtime  - datatime for when the article was published. 2967960 N/A, 4211 "0", 1517 "LongIsland", 1165 "1", 992 "2", 675 "Sports", 562 "3", random other numeric values and section names, very dirty, otherwise dates from 1993-08-01 to 2018-05-28. 2985100 missing once cleaned up.
+
+$duration_hours - values from 0 to 99, 2971568 N/A, seems to be majority filled at the lower level (0-4 hours)
+
+$duration_days - values from 0 to 99, 2980336 N/A, seems to be majority filled in at the lower level (0-2 days), don't seem to match hours values
+
+```{r}
+#examine the different sets of IDs, namely which IDs get paired with which other ones
+IDs <- count(data, uid, pid, duid)
+```
+
+```{r}
+#clean the pubtime data, changing to NA values that don't fit the date-time stamp format (some are small integers, some are section names)
+data$pubtime <- replace(data$pubtime, nchar(data$pubtime) < 15, NA)
+data$pubtime <- replace(data$pubtime, is.na(as.numeric(strtrim(data$pubtime,2))), NA)
+```
+
+```{r}
+#view the cleaned data to verify that only date-time stamps remain
+View(count(data, pubtime))
+```
+
+```{r}
+#use lubridate to covert the date-time stamps to POSIX_CT data as a new column
+data$pub_date <- dmy_hm(data$pubtime)
+```
+
+```{r}
+#view the new pub_date data
+str(data$pub_date)
+View(count(data, pub_date))
+```
+
+## Create a user table with relevant variables
+
+```{r}
+#create a users table by counting the number of unique DUIDs (devices) that show up per customer
+users <- count(count(data, uid, duid), uid)
+
+#rename the columns to "user" and "num_devices"
+names(users) <- c("user","num_devices")
+```
+
+```{r}
+#add the number of pages viewed, and unique pages viewed to each user
+pages_uni <- data %>%
+  group_by(user = uid) %>%
+  summarize(pages = length(page), pages_uni = length(unique(page)))
+users <- left_join(users, pages_uni, by = "user")
+```
+
+```{r}
+#add the number of "front page" views to each user, as well as computing the percentage of those views out of the overall page views
+front_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "FrontPage" | section2 == "Other") %>%
+  filter(sec == "front page" | sec == "newsday") %>%
+  summarize(front_page = length(page))
+users <- left_join(users, front_views, by = "user")
+users$perc_front <- users$front_page/users$pages  
+```
+
+```{r}
+#add the number of "top stories" views to each user, as well as computing the percentage of those views out of the overall page views
+top_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "FrontPage" | section2 == "Other") %>%
+  filter(sec == "top stories") %>%
+  summarize(top_page = length(page))
+users <- left_join(users, top_views, by = "user")
+users$perc_top <- users$top_page/users$pages  
+```
+
+```{r}
+#add the number of "business" views, and unique "business" views to each user, as well as computing the percentage of those views out of the overall page views
+b_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "Business" | section3 == "Business") %>%
+  summarize(business = length(page),business_uni = length(unique(page)))
+users <- left_join(users, b_views, by = "user")
+users$perc_bus <- users$business/users$pages
+users$perc_bus_u <- users$business_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "classified" views, and unique "classified" views to each user, as well as computing the percentage of those views out of the overall page views
+c_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "Classifieds" | section3 == "Classifieds") %>%
+  summarize(classifieds = length(page),classifieds_uni = length(unique(page)))
+users <- left_join(users, c_views, by = "user")
+users$perc_cla <- users$classifieds/users$pages
+users$perc_cla_u <- users$classifieds_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "entertainment" views, and unique "entertainment" views to each user, as well as computing the percentage of those views out of the overall page views
+e_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "Entertainment" | section3 == "Entertainment") %>%
+  summarize(entertainment = length(page),entertainment_uni = length(unique(page)))
+users <- left_join(users, e_views, by = "user")
+users$perc_ent <- users$entertainment/users$pages
+users$perc_ent_u <- users$entertainment_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "lifestyle" views, and unique "lifestyle" views to each user, as well as computing the percentage of those views out of the overall page views
+l_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "LifeStyle" | section3 == "LifeStyle") %>%
+  summarize(lifestyle = length(page),lifestyle_uni = length(unique(page)))
+users <- left_join(users, l_views, by = "user")
+users$perc_lif <- users$lifestyle/users$pages
+users$perc_lif_u <- users$lifestyle_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "long island" views, and unique "long island" views to each user, as well as computing the percentage of those views out of the overall page views
+li_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "LongIsland" | section3 == "LongIsland") %>%
+  summarize(longisland = length(page),longisland_uni = length(unique(page)))
+users <- left_join(users, li_views, by = "user")
+users$perc_lon <- users$longisland/users$pages
+users$perc_lon_u <- users$longisland_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "news" views, and unique "news" views to each user, as well as computing the percentage of those views out of the overall page views
+n_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "News" | section3 == "News") %>%
+  summarize(news = length(page),news_uni = length(unique(page)))
+users <- left_join(users, n_views, by = "user")
+users$perc_new <- users$news/users$pages
+users$perc_new_u <- users$news_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "opinion" views, and unique "opinion" views to each user, as well as computing the percentage of those views out of the overall page views
+o_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "Opinion" | section3 == "Opinion") %>%
+  summarize(opinion = length(page),opinion_uni = length(unique(page)))
+users <- left_join(users, o_views, by = "user")
+users$perc_opi <- users$opinion/users$pages
+users$perc_opi_u <- users$opinion_uni/users$pages_uni
+```
+
+```{r}
+#add the number of "sports" views, and unique "sports" views to each user, as well as computing the percentage of those views out of the overall page views
+s_views <- data %>%
+  group_by(user = uid) %>%
+  filter(section2 == "Sports" | section3 == "Sports") %>%
+  summarize(sports = length(page),sports_uni = length(unique(page)))
+users <- left_join(users, s_views, by = "user")
+users$perc_spo <- users$sports/users$pages
+users$perc_spo_u <- users$sports_uni/users$pages_uni
+```
+
+```{r}
+#computing the percentage of views that represent other sections besides those already computed
+users$perc_other <- 1.0 - (users$perc_front + users$perc_top + users$perc_bus + users$perc_cla + users$perc_ent + users$perc_lif + users$perc_lon + users$perc_new + users$perc_opi + users$perc_spo)
+```
+
+```{r}
+#add the number of "paper" views for a user (where they check the digital version of the physical paper, rather than pulling specific articles), as well as computing the percentage of views that fall under that category
+paper_views <- data %>%
+  group_by(user = uid) %>%
+  filter(ptype == "paper") %>%
+  summarize(paper_views = length(page))
+users <- left_join(users, paper_views, by = "user")
+users$perc_paper <- users$paper_views/users$pages 
+```
+
+```{r}
+#add the number of "photolist" views for a user (where they check a gallery of photos online), as well as computing the percentage of views that fall under that category
+photo_views <- data %>%
+  group_by(user = uid) %>%
+  filter(ptype == "photolist") %>%
+  summarize(photo_views = length(page))
+users <- left_join(users, photo_views, by = "user")
+users$perc_photo <- users$photo_views/users$pages 
+```
+
+```{r}
+#construct weekend and weekday ratings of -1 and 1 for each page view
+data$week <- as.POSIXlt(data$timestampest)
+data$week <-  data$week$wday
+data$week[data$week %in% c(0,6)] <- -1
+data$week[data$week %in% c(1:5)] <- 1
+```
+
+```{r}
+#add the number of views on weekdays and weekends, as well as computing the percentage of those views out of the overall page views
+we_views <- data %>%
+  group_by(user = uid) %>%
+  filter(week == -1) %>%
+  summarize(weekend_views_uni = length(unique(page)))
+users <- left_join(users, we_views, by = "user")
+
+wd_views <- data %>%
+  group_by(user = uid) %>%
+  filter(week == 1) %>%
+  summarize(weekday_views_uni = length(unique(page)))
+users <- left_join(users, wd_views, by = "user")
+
+users$perc_we_u <- users$weekend_views_uni/users$pages_uni
+users$perc_wd_u <- users$weekday_views_uni/users$pages_uni
+
+users$we_wd_split <- users$perc_wd_u - users$perc_we_u
+```
+
+```{r}
+#add the number of views by web platform, as well as computing the percentage of those views out of the overall page views
+web_views <- data %>%
+ group_by(user = uid) %>%
+ filter(platform == "web") %>%
+ summarize(web_views_uni = length(unique(page)))
+users <- left_join(users, web_views, by = "user")
+
+app_views <- data %>%
+ group_by(user = uid) %>%
+ filter(platform == "app") %>%
+ summarize(app_views_uni = length(unique(page)))
+users <- left_join(users, app_views, by = "user")
+
+users$perc_web_u <- users$web_views_uni/users$pages_uni
+users$perc_app_u <- users$app_views_uni/users$pages_uni
+
+users$web_app_split <- users$perc_app_u - users$perc_web_u
+```
+
+```{r}
+#add Prof Malthouse's summary and plot functions for kmeans
+summary.kmeans = function(fit)
+{
+  p = ncol(fit$centers)
+  k = nrow(fit$centers)
+  n = sum(fit$size)
+  sse = sum(fit$withinss)
+  xbar = t(fit$centers)%*%fit$size/n
+  ssb = sum(fit$size*(fit$centers - rep(1,k) %*% t(xbar))^2)
+  print(data.frame(
+    n=c(fit$size, n),
+    Pct=(round(c(fit$size, n)/n,2)),
+    round(rbind(fit$centers, t(xbar)), 2),
+    RMSE = round(sqrt(c(fit$withinss/(p*fit$size-1), sse/(p*(n-k)))), 4)
+  ))
+  cat("SSE = ", sse, "; SSB = ", ssb, "\n")
+  cat("R-Squared = ", ssb/(ssb+sse), "\n")
+  cat("Pseudo F = ", (ssb/(k-1))/(sse/(n-k)), "\n\n");
+  invisible(list(sse=sse, ssb=ssb, Rsqr=ssb/(ssb+sse), F=(ssb/(k-1))/(sse/(n-k))))
+}
+
+plot.kmeans = function(fit,boxplot=F)
+{
+  require(lattice)
+  p = ncol(fit$centers)
+  k = nrow(fit$centers)
+  plotdat = data.frame(
+    mu=as.vector(fit$centers),
+    clus=factor(rep(1:k, p)),
+    var=factor( 0:(p*k-1) %/% k, labels=colnames(fit$centers))
+  )
+print(dotplot(var~mu|clus, data=plotdat,
+  panel=function(...){
+    panel.dotplot(...)
+    panel.abline(v=0, lwd=.1)
+  },
+  layout=c(k,1),
+  xlab="Cluster Mean"
+))
+invisible(plotdat)
+}
+```
+
+```{r}
+#create a version of the users table with all NA values replaced as 0s. 
+users_no_na <- users
+for (i in 1:ncol(users_no_na))
+{
+  users_no_na[[i]] <- replace_na(users_no_na[[i]],0)
+}
+```
+
+## K-Means Clustering 1
+
+Examine number of devices used, amount of page views, proportion of paper viewage, proportion of photo viewage.
+
+```{r}
+#pull the specific cluster data
+users_cluster1 <- users_no_na[,c(2,4,43,45)]
+
+#rename the rows to the UIDs so that they can be examined later
+row.names(users_cluster1) <- users_no_na$user
+
+#convert the number of devices used and page views data (which are right skewed) to the log of those values
+for (i in 1:2){
+  hist(users_cluster1[[i]])
+  for (j in 1:nrow(users_cluster1)){
+    if(users_cluster1[j,i] != 0){
+      users_cluster1[j,i] <- log(users_cluster1[j,i])}
+  }
+  hist(users_cluster1[[i]])
+}
+
+#standardize the data to represent from -1 to 1
+for (i in 1:ncol(users_cluster1)){
+  hist(users_cluster1[[i]])
+  users_cluster1[[i]] <- scale(users_cluster1[[i]],center = FALSE, 0.5*max(users_cluster1[[i]]))
+  users_cluster1[[i]] <- users_cluster1[[i]]-1
+  hist(users_cluster1[[i]])
+}
+```
+
+```{r}
+#create a vector of the scores (between SS/total SS)
+score <- vector(mode = "numeric" ,length = 7)
+
+#generate k-means clusters for sizes 2 through 8, calculate their score, store in the score vector
+for (k in 2:8){
+  cluster1 <- kmeans(users_cluster1,k,iter.max = 100,nstart = 100)
+  score[k-1] <- cluster1$betweenss/cluster1$totss
+}
+
+#plot the scores of each k-means cluster solution
+plot(x = 2:8, y = score)
+```
+
+We have an initial gain from 2 to 3 clusters, then some additional gains up to 5 clusters, then more modest changes. We will examine clusterings of size 3 through 5.
+
+```{r}
+#generate the 3, 4, and 5 clusters for the data, examining their stats and plots
+for (k in 3:5){
+  cluster1 <- kmeans(users_cluster1,k,iter.max = 100,nstart = 100)
+  plot(cluster1)
+  summary(cluster1)
+}
+
+```
+
+For 3 clusters, we see a medium page count group appear (with a corresponding increase in number of devices used), we see a lower page count group with a slight increase in photo views, and finally we have a high page count, and high percentage "paper views" group. The paper viewers cluster is only 10% of the users.
+
+For 4 clusters, we see a high photo viewer group, then a high paper viewer group, then a low page view group, and then a high page view (but not paper or photo) group. The first two groups are 2% and 9% of the user group respectively, followed by 56% in the low page view and 33% in the high page view groups.
+
+For 5 clusters, we have a medium page view group, a high photo view group, a low page view group, a high paper view group, and finally a high page (non paper and photo) group. The groups have 30%, 2%, 39%, 9%, and 20% respectively. This means that the addition of a medium page views group has taken some of the low page views and some of the high page views from the 4-cluster solution.
+
+The pseudo F score increased with each additional cluster, though there is only a small difference between 4 and 5 clusters. The R^2^ sits at around 74.5% for the 4-cluster solution, and 79.6% for the 5-cluster solution.
+
+Thus either either 4 or 5 clusters would be recommended, though perhaps 4 clusters could be crossed with another clustering technique for additional value.
+
+## K-Means Clustering 2 
+
+Examine types of sections read (business, classified, entertainment, lifestyles, longisland, news, opinion, sports, other).
+
+```{r}
+#pull the data used for clustering
+users_cluster2 <- users_no_na[,c(12,16,20,24,28,32,36,40,41)]
+
+#rename the rows as the UID to allow for examination after clusters
+row.names(users_cluster2) <- users_no_na$user
+
+#all the data is from 0 to 1 already, so log transforms are unnecessary, but rescale between -1 and 1
+for (i in 1:ncol(users_cluster2)){
+  users_cluster2[[i]] <- scale(users_cluster2[[i]],center = FALSE, .5*max(users_cluster2[[i]]))
+  users_cluster2[[i]] <- users_cluster2[[i]]-1
+}
+```
+
+```{r}
+#create a vector for the scores for each k-means clustering (between SS/total SS)
+score2 <- vector(mode = "numeric" ,length = 19)
+
+#create clustering solutions for 2 through 20 clusters, saving the score for each
+for (k in 2:20){
+  cluster2 <- kmeans(users_cluster2,k,iter.max = 100,nstart = 100)
+  score[k-1] <- cluster2$betweenss/cluster2$totss
+}
+
+#plot the scores for each clustering solution
+plot(x = 2:20, y = score2)
+```
+
+We see large gains between 2 and 3 clusters and 3 and 4 clusters, but then the size of gains begins to taper off. We will examine clusters of size 4 to 10, as we do have 9 variables.
+
+```{r}
+#for clusters of size 4 to 10, compute a k-means clustering solution, plot it and print the summary stats
+for (k in 4:10){
+  cluster2 <- kmeans(users_cluster2,k,iter.max = 100,nstart = 100)
+  plot(cluster2)
+  print(k)
+  summary(cluster2)
+}
+
+```
+For 4 clusters, we have a group (52%) that is mostly interested in Long Island, but also reads News and Sports articles. We have a group (6%) that focuses on Lifestyle articles, with some interest in Long Island. We have a group (9%) that is mostly interested in Sports, but with some interest in Long Island. And lastly we have a group (33%) that is mostly focused on Long Island, with little interest in other section.
+
+For 5 clusters, we have a heavy Sports group (9%) with minor interest in Long Island. We have a group (41%) with mostly Long Island interest, but which also reads some Sports, News, Lifestyle, and Business articles. We have a group (30%) that views at a low level the same mix as the previous group, but with less Long Island views. We have a group (16%) that is exclusively interested in Long Island stories. Lastly we have a group (5%) that is almost exclusively interested in Lifestyle stories.
+
+For 6 clusters, we have a low usage group (25%) that is somewhat interested in Business, Long Island, and Sports. We have a group (8%) of heavy Sports fans, with minor interest in Long Island. We have a group (6%) of higher News viewers with some Long Island interest. We have a group (15%) that is almost exclusively interested in Long Island. We have a group (40%) that is mostly interested in Long Island, but which also reads some News and Lifestyle articles. Lastly, we have a group (5%) that is mostly focused on the Lifestyle articles.
+
+For 7 and 8 clusters, we have groups centered around Sports, Lifestyle, Long Island, as well as a few shades of combinations of Sports, News and Long Island, as well as a group of lower quantity viewers with slight interest in Business.
+
+For 9 and 10 clusters, we have groups that seems to represent most categories, such as business or entertainment, but even with this number of clusters, the classified, opinion, and other categories never seem to be the focal point for a cluster.
+
+Pseudo F peaked with 5 clusters (though 4 clusters was close to it), and also had an increase at 10 clusters. R^2^ is increasing, with 54.2% at 4 clusters, 61.4% at 5 clusters, and 77.4% at 10 clusters. It seems like either 4 or 5 clusters would be good solutions.
+
+## Combined K-Means Clustering
+
+```{r}
+#building the overall set with transformed data, dropping the generally unused topics of classified, other, and opinion
+users_cluster1$user <- rownames(users_cluster1)
+users_cluster2$user <- rownames(users_cluster2)
+users_cluster12 <- left_join(users_cluster1,users_cluster2, by = "user")
+users_cluster12$user <- NULL
+users_cluster12$perc_cla_u <- NULL
+users_cluster12$perc_opi_u <- NULL
+users_cluster12$perc_other <- NULL
+```
+
+
+
+```{r}
+#create a vector for the scores for each k-means clustering (between SS/total SS)
+score12 <- vector(mode = "numeric" ,length = 10)
+
+#create clustering solutions for 2 through 13 clusters, saving the score for each
+for (k in 4:13){
+  cluster12 <- kmeans(users_cluster12,k,iter.max = 100,nstart = 100)
+  score12[k-3] <- cluster12$betweenss/cluster12$totss
+}
+
+#plot the scores for each clustering solution
+plot(x = 4:13, y = score12)
+```
+
+We see fairly big increases in clustering from 4 to 5 to 6, then less with 7 and beyond. We'll examine clustering by 5-9 clusters.
+
+```{r}
+#for clusters of size 5 to 9, compute a k-means clustering solution, plot it and print the summary stats
+for (k in 5:9){
+  cluster12 <- kmeans(users_cluster12,k,iter.max = 100,nstart = 100)
+  plot(cluster12)
+  print(k)
+  summary(cluster12)
+}
+
+```
+For 5 clusters: group (8%) of sports focus with interest in long island amd medium page views. Group (25%) of long island focus with low page views. Group (34%) of long island, news, sports, and other sections interest with high views. Group (9%) of long island, sports, and news interest who read the digital paper. Group (25%) of lifestyle and broad interests who occasionally view photos and have medium page views.
+
+For 6 clusters: group (20%) of news, long island interest with other topics as well and low-to-medium page views. Group (33%) of long island and other topics interest with lots of page views. Group (24%) of long island intense focus with low-to-medium page views. Group (6%) of Lifestyle intense focus with high photo views. Group (9%) of long island, sports, news interest who read the digital paper. Group (8%) of sports focus with some long island interest and medium views.
+
+For 7 clusters: group (8%) of sports focus with interest in long island with medium page views. Group (24%) of Long island focus but with sports, news, and other section interest and high views. Group (13%) of Long island intense focus with low page views. Group (15%) of broad topic interest (most news) with low page views. Group (26%) of long island focus with interest in other sections and medium page views. Group (9%) of long island, sports, and news interest who read the digital paper. Group (5%) of lifestyle interest with lots of photo views.
+
+For 8 clusters: group (26%) of long island interest with medium page views. Group (23%) of long island, news, and sports interest with high page views. Group (10%) of entertainment and business interest with low page views. Group (13%) of intense focus on long island with low page views. Group (8%) of Sports focus with medium page views. Group (5%) of lifestyle focus and lots of photo views. Group (6%) of News focus with interest in long island and medium page views. Group (9%) of sports, news, long island interest who read the digital paper.
+
+For 9 clusters: group (13%) of long island focused readers but low page views. Group (2%) of entertainment focused, with some photo views and some long island interest. Group (25%) of long island interest with a higher page view rate than the first group. Group (8%) of Sports focused users with high page views. Group (9%) of long island and sports users who read the digital version of the paper a lot. Group (6%) of News focused users with some long island interest. Group (9%) of business focused users. Group (23%) of long island focused users with some interest in sports, news, and lifestyle and high page views. Group (5%) of Lifestyle focused users who view lots of photos.
+
+Pseudo F is highest with 6 clusters. R^2^ is at 62.5% for 6 clusters, only 70.7% at 9 clusters.
+
+## K-Means Clustering 4 (add web and weekend/weekday data)
+
+```{r}
+#pull the specific cluster data
+users_cluster123 <- users_no_na[,c(2,4,12,16,20,24,28,32,36,40,41,43,45,50,55)]
+
+#rename the rows to the UIDs so that they can be examined later
+row.names(users_cluster123) <- users_no_na$user
+
+#convert the number of devices used and page views data (which are right skewed) to the log of those values
+for (i in 1:2){
+  hist(users_cluster123[[i]])
+  for (j in 1:nrow(users_cluster123)){
+    if(users_cluster123[j,i] != 0){
+      users_cluster123[j,i] <- log(users_cluster123[j,i])}
+  }
+  hist(users_cluster123[[i]])
+}
+
+#standardize the data to represent from -1 to 1
+for (i in 1:ncol(users_cluster123)){
+  hist(users_cluster123[[i]])
+  col_mean <- mean(users_cluster123[[i]])
+  #col_sd <- sd(users_cluster123[[i]])
+  col_scale <- max(max(users_cluster123[[i]])-col_mean,abs(min(users_cluster123[[i]])-col_mean))
+  users_cluster123[[i]] <- (users_cluster123[[i]]-col_mean)/(col_scale)
+  hist(users_cluster123[[i]])
+}
+
+```
+
+
+```{r}
+#create a vector for the scores for each k-means clustering (between SS/total SS)
+score123 <- vector(mode = "numeric" ,length = 10)
+
+#create clustering solutions for 4 through 13 clusters, saving the score for each
+for (k in 4:13){
+  cluster123 <- kmeans(users_cluster123,k,iter.max = 100,nstart = 100)
+  score123[k-3] <- cluster123$betweenss/cluster123$totss
+}
+```
+
+```{r}
+#plot the scores for each clustering solution
+plot(x = 4:13, y = score123, xlab = "Clustering Size", ylab = "Clustering Score (Between SS/Total SS")
+```
+
+```{r}
+#for clusters of size 5 to 10, compute a k-means clustering solution, plot it and print the summary stats
+for (k in 5:10){
+  cluster123 <- kmeans(users_cluster123,k,iter.max = 100,nstart = 100)
+  plot(cluster123)
+  print(k)
+  summary(cluster123)
+}
+
+```
+
+```{r}
+set.seed(4)
+final_cluster <- kmeans(users_cluster123,8,iter.max = 100,nstart = 100)
+plot(final_cluster)
+summary(final_cluster)
+
+```
+
+```{r}
+cluster_ids <- final_cluster$cluster
+```
+
+```{r}
+cluster_ids_df <- as.data.frame(users$user)
+names(cluster_ids_df) <- "user"
+cluster_ids_df$cluster <- cluster_ids
+```
+
+```{r}
+write_csv(cluster_ids_df, "clusters.csv")
+```
+
+```{r}
+View(cor(users_cluster123))
+View(solve(cor(users_cluster123)))
+
+```
+
+```{r}
+plot(jitter(users_cluster123$perc_lon_u), jitter(users_cluster123$pages_uni), col=final_cluster$cluster, pch=15+final_cluster$cluster, xlab = "Relative Long Island Interest", ylab = "Relative Unique Page Views")
+```
+
+```{r}
+## get ptype, state,city,device
+# state
+usr_location <- data %>% group_by(uid,state) %>% summarise(num = length(unique(page))) %>% ungroup()
+usr_location$state <- replace(usr_location$state, usr_location$state == "NULL", NA)
+usr_location$state[is.na(usr_location$state)] <- 'Other'
+usr_location <- usr_location %>% group_by(uid) %>% filter(num == max(num))
+top_5_state <- table(usr_location$state) %>% sort(decreasing = T)
+top_5_state <- names(top_5_state)[1:5]
+usr_location <- usr_location[!duplicated(usr_location$uid),]
+usr_location$state[!(usr_location$state %in% top_5_state)] <- 'Other'
+
+ans1 = table(final_cluster$cluster,usr_location$state)
+ans1
+prop.table(ans1, 1)
+chisq.test(ans1)
+chisq.test(ans1)$stdres
+
+#ptype
+usr_ptype <- data %>% group_by(uid,ptype) %>% summarise(num = length(unique(page))) %>% ungroup()
+usr_ptype$ptype[is.na(usr_ptype$ptype)] <- 'Other'
+usr_ptype <- usr_ptype %>% group_by(uid) %>% filter(num == max(num))
+top_5_ptype <- table(usr_ptype$ptype) %>% sort(decreasing = T)
+top_5_ptype <- names(top_5_ptype)[1:5]
+usr_ptype <- usr_ptype[!duplicated(usr_ptype$uid),]
+usr_ptype$ptype[!(usr_ptype$ptype %in% top_5_ptype)] <- 'Other'
+
+ans2 = table(final_cluster$cluster,usr_ptype$ptype)
+ans2
+prop.table(ans2, 1)
+chisq.test(ans2)
+chisq.test(ans2)$stdres
+
+# city
+usr_city <- data %>% group_by(uid,city) %>% summarise(num = length(unique(page))) %>% ungroup()
+usr_city$city <- replace(usr_city$city, usr_city$city == "NULL", NA)
+usr_city$city[is.na(usr_city$city)] <- 'Other'
+usr_city <- usr_city %>% group_by(uid) %>% filter(num == max(num))
+top_5_city <- table(usr_city$city) %>% sort(decreasing = T)
+top_5_city <- names(top_5_city)[1:5]
+usr_city <- usr_city[!duplicated(usr_city$uid),]
+usr_city$city[!(usr_city$city %in% top_5_city)] <- 'Other'
+
+ans3 = table(final_cluster$cluster,usr_city$city)
+ans3
+prop.table(ans3, 1)
+chisq.test(ans3)
+chisq.test(ans3)$stdres
+
+# device
+usr_device <- data %>% group_by(uid,device) %>% summarise(num = length(unique(page))) %>% ungroup()
+usr_device$device[is.na(usr_device$device)] <- 'Other'
+usr_device <- usr_device %>% group_by(uid) %>% filter(num == max(num))
+top_5_device <- table(usr_device$device) %>% sort(decreasing = T)
+top_5_device <- names(top_5_device)[1:3]
+usr_device <- usr_device[!duplicated(usr_device$uid),]
+usr_device$device[!(usr_device$device %in% top_5_device)] <- 'Other'
+
+ans4 = table(final_cluster$cluster,usr_device$device)
+ans4
+prop.table(ans4, 1)
+chisq.test(ans4)
+chisq.test(ans4)$stdres
+
+
+```
